@@ -48,8 +48,13 @@ i18n_tr:
 
 运行生成器：
 
+A) 在 pubspec.yaml 添加配置，并运行：
 ```bash
 dart run i18n_tr:generate
+```
+B) 或创建 i18n_tr_config.yaml 添加配置，并运行：
+```bash
+dart run i18n_tr:generate --config i18n_tr_config.yaml
 ```
 
 ## Usage
