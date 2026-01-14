@@ -1,0 +1,578 @@
+/// bin/generate.dart
+///
+/// 依赖（放到你的工具包 / 项目 pubspec.yaml）：
+/// dependencies:
+///   args: ^2.5.0
+///   yaml: ^3.1.2
+///   crypto: ^3.0.3
+///
+/// 用法：
+/// 1) 默认读 pubspec.yaml 的 i18n_tr 配置：
+///    dart run i18n_tr:generate
+/// 2) 指定外部配置文件（yaml/json），覆盖 pubspec：
+///    dart run i18n_tr:generate --config i18n_tr_config.yaml
+///
+/// 配置格式：
+/// A) pubspec.yaml
+/// i18n_tr:
+///   project_lib: lib
+///   i18n_dir: i18n_tr/lib/i18n
+///   source_file: i18n_tr/lib/i18n/_source_text.dart
+///   config_file: i18n_tr/lib/i18n_config.dart
+///   source_locale: zh_CN
+///   fallback_locale: zh_CN
+///   system_label: 跟随系统
+///   langs:
+///     - locale: zh_CN
+///       file: zh_cn.dart
+///       map: zhCN
+///       label: 简体中文
+///     - locale: en_US
+///       file: en_us.dart
+///       map: enUS
+///       label: English
+///
+/// B) i18n_tr_config.yaml（同结构，顶层无需 i18n_tr 包裹）
+/// project_lib: lib
+/// i18n_dir: i18n_tr/lib/i18n
+/// source_file: i18n_tr/lib/i18n/_source_text.dart
+/// config_file: i18n_tr/lib/i18n_config.dart
+/// source_locale: zh_CN
+/// fallback_locale: zh_CN
+/// system_label: 跟随系统
+/// langs:
+///   - locale: zh_CN
+///     file: zh_cn.dart
+///     map: zhCN
+///     label: 简体中文
+
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:args/args.dart';
+import 'package:crypto/crypto.dart';
+import 'package:yaml/yaml.dart';
+
+final RegExp _trPattern = RegExp(r'''tr\(\s*['"](.+?)['"]''');
+
+class LangSpec {
+  final String locale; // zh_CN（仅用于标识/可读）
+  final String filePath; // lib/i18n/zh_cn.dart（最终路径）
+  final String mapName; // zhCN
+  final String label; // 简体中文
+
+  LangSpec({
+    required this.locale,
+    required this.filePath,
+    required this.mapName,
+    required this.label,
+  });
+}
+
+class I18nTrConfig {
+  final String projectLib; // lib
+  final String i18nDir; // lib/i18n
+  final String sourceFile; // lib/i18n/_source_text.dart
+  final String configFile; // lib/i18n_config.dart
+  final String sourceLocale; // zh_CN
+  final String fallbackLocale; // zh_CN
+  final String systemLabel; // 跟随系统
+  final List<LangSpec> langs;
+
+  I18nTrConfig({
+    required this.projectLib,
+    required this.i18nDir,
+    required this.sourceFile,
+    required this.configFile,
+    required this.sourceLocale,
+    required this.fallbackLocale,
+    required this.systemLabel,
+    required this.langs,
+  });
+}
+
+Future<void> main(List<String> args) async {
+  final cfg = await _loadConfig(args);
+
+  final foundTexts = await _scanTexts(cfg);
+  stdout.writeln('🔍 找到 ${foundTexts.length} 条 tr 文案（任意语言）');
+
+  final sourceMap = _loadSourceMap(cfg.sourceFile); // key -> text
+  final langData = <LangSpec, Map<String, String>>{};
+
+  // 读取已有语言文件（保留已翻译内容）
+  for (final lang in cfg.langs) {
+    langData[lang] = _loadLangMap(lang.filePath, lang.mapName);
+  }
+
+  // 生成 key + 补齐语言包
+  for (final text in foundTexts) {
+    final key = _toHashKey(text);
+
+    // 校验：hash 对应的文案是否一致（防止文案变化导致复用旧 key）
+    final old = sourceMap[key];
+    if (old != null && old != text) {
+      stderr.writeln(
+        '❌ Hash 冲突或文案被修改: $key\n'
+            '旧: $old\n'
+            '新: $text\n'
+            '建议：不要直接修改 tr(原文案)，或提供迁移机制。',
+      );
+      exit(2);
+    }
+
+    sourceMap[key] = text;
+
+    // 补齐各语言包缺失 key：先用原文案占位（保留可读）
+    for (final lang in cfg.langs) {
+      final map = langData[lang]!;
+      map.putIfAbsent(key, () => text);
+    }
+  }
+
+  // 写回语言文件
+  for (final lang in cfg.langs) {
+    _writeLangFile(lang.filePath, lang.mapName, langData[lang]!);
+  }
+
+  // 写回 source 校验文件（Dart Map）
+  _writeSourceDartMap(cfg.sourceFile, sourceMap);
+
+  // 生成运行期配置文件（供 i18n.dart 直接使用）
+  _writeRuntimeConfig(cfg);
+
+  stdout.writeln('✅ 国际化语言文件 & 校验文件已更新完成');
+}
+
+/// =====================
+/// 扫描 lib 下所有 dart 文件：提取 tr("...") 文案
+/// =====================
+Future<Set<String>> _scanTexts(I18nTrConfig cfg) async {
+  final libDir = Directory(cfg.projectLib);
+  if (!libDir.existsSync()) {
+    stderr.writeln('❌ 找不到目录：${cfg.projectLib}');
+    exit(1);
+  }
+
+  final found = <String>{};
+
+  await for (final entity in libDir.list(recursive: true, followLinks: false)) {
+    if (entity is! File) continue;
+    final path = entity.path;
+
+    if (!path.endsWith('.dart')) continue;
+
+    // 跳过 i18n 目录（避免扫描语言文件自身）
+    if (_isUnderDir(path, cfg.i18nDir)) continue;
+
+    final content = await entity.readAsString();
+
+    for (final m in _trPattern.allMatches(content)) {
+      final text = m.group(1);
+      if (text == null) continue;
+      if (_shouldTreatAsText(text)) {
+        found.add(text);
+      }
+    }
+  }
+
+  return found;
+}
+
+bool _isUnderDir(String filePath, String dirPath) {
+  final p = filePath.replaceAll('\\', '/');
+  final d = dirPath.replaceAll('\\', '/').replaceAll(RegExp(r'/$'), '');
+  return p.startsWith('$d/');
+}
+
+/// 文案判定：不限制中文，任何语言都算；但过滤明显不是文案的
+bool _shouldTreatAsText(String text) {
+  final t = text.trim();
+  if (t.isEmpty) return false;
+  if (t.runes.length < 2) return false; // 太短通常不是文案（可按需调整）
+  if (RegExp(r'^\d+$').hasMatch(t)) return false; // 纯数字
+  if (RegExp(r'^(https?:)?//').hasMatch(t)) return false; // URL
+  if (t.contains('www.')) return false;
+  return true;
+}
+
+/// =====================
+/// Hash Key：MD5 前 8 位（与 Python hashlib.md5 保持一致）
+/// =====================
+String _toHashKey(String text) {
+  final bytes = utf8.encode(text);
+  final digest = md5.convert(bytes).toString(); // 32位hex
+  return 'h_${digest.substring(0, 8)}';
+}
+
+/// =====================
+/// 读取/写入 source 文件：key -> 原始文案（Dart Map）
+/// =====================
+Map<String, String> _loadSourceMap(String path) {
+  final file = File(path);
+  if (!file.existsSync()) return {};
+
+  if (path.endsWith('.json')) {
+    final obj = jsonDecode(file.readAsStringSync());
+    if (obj is! Map) return {};
+    return obj.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+
+  final content = file.readAsStringSync();
+  final reg = RegExp(
+    r'const\s+Map<String,\s*String>\s+i18nSourceText\s*=\s*\{([\s\S]*?)\};',
+    multiLine: true,
+  );
+  final match = reg.firstMatch(content);
+  if (match == null) return {};
+
+  final body = match.group(1) ?? '';
+  final entryReg = RegExp(
+    r"'((?:\\'|[^'])*)'\s*:\s*'((?:\\'|[^'])*)'",
+    multiLine: true,
+  );
+
+  final map = <String, String>{};
+  for (final m in entryReg.allMatches(body)) {
+    final k = (m.group(1) ?? '').replaceAll(r"\'", "'");
+    final v = (m.group(2) ?? '').replaceAll(r"\'", "'");
+    map[k] = v;
+  }
+  return map;
+}
+
+void _writeSourceDartMap(String path, Map<String, String> sourceMap) {
+  final dir = Directory(File(path).parent.path);
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+
+  final keys = sourceMap.keys.toList()..sort();
+  final sorted = <String, String>{
+    for (final k in keys) k: sourceMap[k]!,
+  };
+
+  final sb = StringBuffer();
+  sb.writeln('const Map<String, String> i18nSourceText = {');
+  for (final e in sorted.entries) {
+    final k = e.key.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
+    final v = e.value.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
+    sb.writeln("  '$k': '$v',");
+  }
+  sb.writeln('};\n');
+  File(path).writeAsStringSync(sb.toString());
+}
+
+/// =====================
+/// 读取/写入语言 Dart 文件：
+/// const Map<String, String> mapName = { 'h_xxx': 'value', ... };
+/// =====================
+Map<String, String> _loadLangMap(String path, String mapName) {
+  final file = File(path);
+  if (!file.existsSync()) return {};
+
+  final content = file.readAsStringSync();
+
+  final reg = RegExp(
+    'const\\s+Map<String,\\s*String>\\s+$mapName\\s*=\\s*\\{([\\s\\S]*?)\\};',
+    multiLine: true,
+  );
+  final match = reg.firstMatch(content);
+  if (match == null) return {};
+
+  final body = match.group(1) ?? '';
+
+  // 支持 \' 转义
+  final entryReg = RegExp(
+    r"'((?:\\'|[^'])*)'\s*:\s*'((?:\\'|[^'])*)'",
+    multiLine: true,
+  );
+
+  final map = <String, String>{};
+  for (final m in entryReg.allMatches(body)) {
+    final k = (m.group(1) ?? '').replaceAll(r"\'", "'");
+    final v = (m.group(2) ?? '').replaceAll(r"\'", "'");
+    map[k] = v;
+  }
+  return map;
+}
+
+void _writeLangFile(String path, String mapName, Map<String, String> data) {
+  final dir = Directory(File(path).parent.path);
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+
+  final keys = data.keys.toList()..sort();
+
+  final sb = StringBuffer();
+  sb.writeln("const Map<String, String> $mapName = {");
+  for (final k in keys) {
+    final v = (data[k] ?? '')
+        .replaceAll(r'\', r'\\') // 先转义反斜杠
+        .replaceAll("'", r"\'"); // 再转义单引号
+    sb.writeln("  '$k': '$v',");
+  }
+  sb.writeln('};\n');
+
+  File(path).writeAsStringSync(sb.toString());
+}
+
+/// =====================
+/// 生成运行期配置文件（i18n_tr/lib/i18n_config.dart）
+/// =====================
+void _writeRuntimeConfig(I18nTrConfig cfg) {
+  final outFile = File(cfg.configFile);
+  final dir = Directory(outFile.parent.path);
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+
+  final imports = <String>{};
+  imports.add(_relativeImportPath(cfg.configFile, cfg.sourceFile));
+  for (final lang in cfg.langs) {
+    imports.add(_relativeImportPath(cfg.configFile, lang.filePath));
+  }
+
+  final sb = StringBuffer();
+  sb.writeln("///This file is automatically generated. DO NOT EDIT, all your changes would be lost.");
+  sb.writeln("import 'package:i18n_tr/i18n_config.dart';");
+  for (final p in imports) {
+    sb.writeln("import '$p';");
+  }
+  sb.writeln();
+  sb.writeln('const I18nRuntimeConfig i18nConfig = I18nRuntimeConfig(');
+  sb.writeln('  systemLabel: ${_dartString(cfg.systemLabel)},');
+  sb.writeln('  sourceLocale: ${_dartStringNullable(cfg.sourceLocale)},');
+  sb.writeln('  fallbackLocale: ${_dartStringNullable(cfg.fallbackLocale)},');
+  sb.writeln('  sourceText: i18nSourceText,');
+  sb.writeln('  langs: [');
+  for (final lang in cfg.langs) {
+    sb.writeln('    I18nLangDef(');
+    sb.writeln('      locale: ${_dartString(lang.locale)},');
+    sb.writeln('      label: ${_dartString(lang.label)},');
+    sb.writeln('      map: ${lang.mapName},');
+    sb.writeln('    ),');
+  }
+  sb.writeln('  ],');
+  sb.writeln(');');
+
+  outFile.writeAsStringSync(sb.toString());
+}
+
+String _relativeImportPath(String fromFile, String targetFile) {
+  final fromNorm = fromFile.replaceAll('\\', '/');
+  final targetNorm = targetFile.replaceAll('\\', '/');
+
+  final fromDir = fromNorm.contains('/')
+      ? fromNorm.substring(0, fromNorm.lastIndexOf('/'))
+      : '';
+
+  final fromSegs = fromDir.split('/').where((s) => s.isNotEmpty).toList();
+  final toSegs = targetNorm.split('/').where((s) => s.isNotEmpty).toList();
+
+  var i = 0;
+  while (i < fromSegs.length && i < toSegs.length && fromSegs[i] == toSegs[i]) {
+    i++;
+  }
+
+  final up = List.filled(fromSegs.length - i, '..');
+  final down = toSegs.sublist(i);
+  final parts = [...up, ...down];
+
+  return parts.isEmpty ? targetNorm : parts.join('/');
+}
+
+String _dartString(String value) {
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll("'", r"\'");
+  return "'$escaped'";
+}
+
+String _dartStringNullable(String? value) {
+  if (value == null) return 'null';
+  return _dartString(value);
+}
+
+/// =====================
+/// 配置加载：支持 A(pubspec) + B(--config yaml/json)
+/// =====================
+Future<I18nTrConfig> _loadConfig(List<String> args) async {
+  final parser = ArgParser()
+    ..addOption('config', abbr: 'c', help: '配置文件路径（yaml/json），优先级高于 pubspec.yaml')
+    ..addFlag('help', abbr: 'h', negatable: false, help: '查看帮助');
+
+  final res = parser.parse(args);
+
+  if (res['help'] == true) {
+    stdout.writeln('i18n_tr generator\n');
+    stdout.writeln('用法：');
+    stdout.writeln('  dart run i18n_tr:generate');
+    stdout.writeln('  dart run i18n_tr:generate --config i18n_tr_config.yaml\n');
+    stdout.writeln(parser.usage);
+    exit(0);
+  }
+
+  final configPath = (res['config'] as String?)?.trim();
+  if (configPath != null && configPath.isNotEmpty) {
+    return _loadFromConfigFile(configPath);
+  }
+
+  return _loadFromPubspec();
+}
+
+I18nTrConfig _loadFromPubspec() {
+  final pubspec = File('pubspec.yaml');
+  if (!pubspec.existsSync()) {
+    _failWithTemplate('找不到 pubspec.yaml，且未指定 --config');
+  }
+
+  final root = loadYaml(pubspec.readAsStringSync());
+  if (root is! YamlMap || root['i18n_tr'] == null) {
+    _failWithTemplate('pubspec.yaml 未配置 i18n_tr，且未指定 --config');
+  }
+
+  final node = root['i18n_tr'];
+  final map = _yamlToPlain(node);
+  if (map is! Map<String, dynamic>) {
+    _failWithTemplate('pubspec.yaml 的 i18n_tr 配置格式不正确');
+  }
+
+  return _parseConfig(map, from: 'pubspec.yaml -> i18n_tr');
+}
+
+I18nTrConfig _loadFromConfigFile(String path) {
+  final f = File(path);
+  if (!f.existsSync()) {
+    _failWithTemplate('找不到配置文件：$path');
+  }
+
+  final text = f.readAsStringSync();
+  Map<String, dynamic> map;
+
+  if (path.endsWith('.json')) {
+    final obj = jsonDecode(text);
+    if (obj is! Map) _failWithTemplate('配置 JSON 顶层必须是对象：$path');
+    map = obj.map((k, v) => MapEntry(k.toString(), v));
+  } else {
+    final y = loadYaml(text);
+    final plain = _yamlToPlain(y);
+    if (plain is! Map<String, dynamic>) _failWithTemplate('配置 YAML 顶层必须是映射：$path');
+    map = plain;
+  }
+
+  // 允许外部文件也用 i18n_tr: {...}
+  if (map.containsKey('i18n_tr') && map['i18n_tr'] is Map) {
+    map = Map<String, dynamic>.from(map['i18n_tr'] as Map);
+  }
+
+  return _parseConfig(map, from: path);
+}
+
+I18nTrConfig _parseConfig(Map<String, dynamic> m, {required String from}) {
+  String getStr(String k, {String? def}) {
+    final v = m[k];
+    if (v == null) {
+      if (def != null) return def;
+      throw FormatException('[$from] 缺少必填字段：$k');
+    }
+    return v.toString();
+  }
+
+  final projectLib = getStr('project_lib', def: 'lib');
+  final i18nDir = getStr('i18n_dir', def: 'i18n_tr/lib/i18n');
+  final sourceFile = getStr('source_file', def: '$i18nDir/_source_text.dart');
+  final configFile = getStr('config_file', def: '$i18nDir/i18n_config.dart');
+  final sourceLocale = getStr('source_locale', def: 'zh');
+  final fallbackLocale = getStr('fallback_locale', def: 'en');
+  final systemLabel = getStr('system_label', def: '跟随系统');
+
+  final langsRaw = m['langs'];
+  if (langsRaw is! List || langsRaw.isEmpty) {
+    throw FormatException('[$from] langs 必须是非空数组');
+  }
+
+  final langs = <LangSpec>[];
+  for (final item in langsRaw) {
+    final plain = _yamlToPlain(item);
+    if (plain is! Map<String, dynamic>) {
+      throw FormatException('[$from] langs 项必须是对象：$item');
+    }
+
+    final locale = (plain['locale'] ?? '').toString().trim();
+    final file = (plain['file'] ?? '').toString().trim();
+    final mapName = (plain['map'] ?? '').toString().trim();
+    final label = (plain['label'] ?? '').toString().trim();
+
+    if (locale.isEmpty || file.isEmpty || mapName.isEmpty) {
+      throw FormatException('[$from] langs 项必须包含 locale/file/map：$plain');
+    }
+
+    final filePath = file.contains('/') || file.contains('\\') ? file : '$i18nDir/$file';
+
+    langs.add(LangSpec(
+      locale: locale,
+      filePath: filePath,
+      mapName: mapName,
+      label: label.isEmpty ? locale : label,
+    ));
+  }
+
+  // 简单校验：mapName 不重复 / filePath 不重复
+  final mapNames = <String>{};
+  final filePaths = <String>{};
+  for (final l in langs) {
+    if (!mapNames.add(l.mapName)) {
+      throw FormatException('[$from] map 重复：${l.mapName}');
+    }
+    if (!filePaths.add(l.filePath)) {
+      throw FormatException('[$from] file 重复：${l.filePath}');
+    }
+  }
+
+  return I18nTrConfig(
+    projectLib: projectLib,
+    i18nDir: i18nDir,
+    sourceFile: sourceFile,
+    configFile: configFile,
+    sourceLocale: sourceLocale,
+    fallbackLocale: fallbackLocale,
+    systemLabel: systemLabel,
+    langs: langs,
+  );
+}
+
+/// 将 YamlMap/YamlList 递归转换为普通 Dart Map/List（便于处理）
+dynamic _yamlToPlain(dynamic node) {
+  if (node is YamlMap) {
+    return <String, dynamic>{
+      for (final e in node.entries) e.key.toString(): _yamlToPlain(e.value),
+    };
+  }
+  if (node is YamlList) {
+    return node.map(_yamlToPlain).toList();
+  }
+  return node;
+}
+
+Never _failWithTemplate(String msg) {
+  stderr.writeln('❌ $msg\n');
+  stderr.writeln('你可以选择：\n');
+
+  stderr.writeln('A) 在 pubspec.yaml 添加：\n'
+      'i18n_tr:\n'
+      '  i18n_dir: lib/i18n\n'
+      '  # source_file: lib/i18n/_source_text.dart\n'
+      '  # config_file: lib/i18n_config.dart\n'
+      '  source_locale: zh_CN\n'
+      '  fallback_locale: en_US\n'
+      '  system_label: 跟随系统\n'
+      '  langs:\n'
+      '    - locale: zh_CN\n'
+      '      file: zh_cn.dart\n'
+      '      map: zhCN\n'
+      '      label: 简体中文\n'
+      '    - locale: en_US\n'
+      '      file: en_us.dart\n'
+      '      map: enUS\n');
+
+  stderr.writeln('B) 或创建 i18n_tr_config.yaml，并运行：\n'
+      'dart run i18n_tr:generate --config i18n_tr_config.yaml\n');
+
+  exit(1);
+}
