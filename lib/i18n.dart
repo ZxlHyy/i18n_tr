@@ -85,7 +85,7 @@ class I18n extends ChangeNotifier {
 
   static bool isInit = false;
 
-  late final SharedPreferences prefs;
+  SharedPreferences? prefs;
 
   static const _spKey = 'i18n_language_mode';
 
@@ -115,7 +115,7 @@ class I18n extends ChangeNotifier {
   /// 初始化（App 启动）
   /// =====================
   Future<void> init({
-    String? themeModeName,
+    String? languageName,
     I18nRuntimeConfig? config,
   }) async {
     if (isInit) return;
@@ -123,10 +123,10 @@ class I18n extends ChangeNotifier {
     if (config != null) {
       _applyRuntimeConfig(config);
     }
-    var name = themeModeName;
+    var name = languageName;
     if (name == null) {
       prefs = await SharedPreferences.getInstance();
-      name = prefs.getString(_spKey);
+      name = prefs!.getString(_spKey);
     }
     _mode = LanguageMode.fromName(
       name,
@@ -153,7 +153,9 @@ class I18n extends ChangeNotifier {
     _mode = mode;
     _localeKey = _resolveLocaleKey(mode);
 
-    prefs.setString(_spKey, mode.name);
+    if (prefs != null) {
+      prefs!.setString(_spKey, mode.name);
+    }
     notifyListeners();
   }
 

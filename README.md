@@ -17,7 +17,7 @@
 
 ```yaml
 dependencies:
-  i18n_tr: 0.0.1
+  i18n_tr: 0.0.3
 ```
 
 配置 `i18n_tr`（在应用的 `pubspec.yaml`）：
@@ -65,7 +65,7 @@ dart run i18n_tr:generate --config i18n_tr_config.yaml
 import 'package:i18n_tr/i18n.dart';
 
 void main() async {
-  await I18n.instance.init();
+  await I18n.instance.init(config: i18nConfig); // 初始化传入生成的i18n_config中的i18nConfig（后续命令直接生成）
   runApp(const MyApp());
 }
 ```
@@ -102,6 +102,7 @@ AnimatedBuilder(
 
 ```dart
 I18n.instance.change(mode);
+// 插件内自行保存。也可以自行保存mode.name到本地，下次启动时读取I18n.instance.init(languageName:modeName);
 ```
 
 `mode` 可以从 `I18n.instance.modes` 里获取。
