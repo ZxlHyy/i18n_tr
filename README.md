@@ -4,8 +4,10 @@
 
 [![pub package](https://img.shields.io/pub/v/i18n_tr.svg)](https://pub.dev/packages/i18n_tr)
 
-![示例图片](./images/20260119171904.jpg)
-![示例图片](./images/SVID_20260119.gif)
+<p align="center">
+  <img src="./images/20260119171904.jpg" width="240"  alt=""/>
+  <img src="./images/SVID_20260119.gif" width="240"  alt=""/>
+</p>
 
 ## Features
 
