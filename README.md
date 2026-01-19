@@ -4,10 +4,16 @@
 
 [![pub package](https://img.shields.io/pub/v/i18n_tr.svg)](https://pub.dev/packages/i18n_tr)
 
-<p align="center">
-  <img src="./images/20260119171904.jpg" width="240" style="vertical-align: top;" alt=""/>
-  <img src="./images/SVID_20260119.gif" width="240" style="vertical-align: top;" alt=""/>
-</p>
+<table align="center">
+  <tr valign="top">
+    <td>
+      <img src="./images/20260119171904.jpg" width="240" />
+    </td>
+    <td>
+      <img src="./images/SVID_20260119.gif" width="240" />
+    </td>
+  </tr>
+</table>
 
 ## Features
 
