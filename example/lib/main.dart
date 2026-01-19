@@ -58,9 +58,16 @@ class HomePage extends StatelessWidget {
             Text('Current mode: ${mode.label}'),
             const SizedBox(height: 12),
 
+            Text(tr('你好，{name}', {'name': tr('世界')})),
             Text(tr('登录')),
             Text(tr('Logout')),
             Text(tr('キャンセル')),
+            Text(tr('新增')),
+            Text(tr('迁移')),
+            Text(tr('清理')),
+            Text(tr('''
+            这是一段测试文本。
+            ''')),
 
             const Divider(height: 32),
 

@@ -18,3 +18,7 @@ i18n_tr:
       label: 日本語
       file: ja_jp.dart
       map: jaJP
+  prune_unused: true
+  migrations:
+    - from: 新增的
+      to: 新增

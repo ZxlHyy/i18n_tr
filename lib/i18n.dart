@@ -208,7 +208,7 @@ class I18n extends ChangeNotifier {
 
   static Locale _toLocale(String key) {
     final parts = key.split('_');
-    return Locale(parts[0], parts[1]);
+    return parts.length >= 2 ? Locale(parts[0], parts[1]) : Locale(parts[0]);
   }
 
   static Map<String, LangMap> _buildLangMaps(I18nConfig config) {
