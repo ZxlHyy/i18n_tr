@@ -4,10 +4,14 @@
 
 [![pub package](https://img.shields.io/pub/v/i18n_tr.svg)](https://pub.dev/packages/i18n_tr)
 
+![示例图片](./images/20260119171904.jpg)
+![示例图片](./images/SVID_20260119.gif)
+
 ## Features
 
 - 直接用原文案作为 key（例如中文），无需手写 key
 - `dart run i18n_tr:generate` 自动提取文案并生成语言包
+- `dart run i18n_tr:generate --config i18n_tr_config.yaml --prune` 同上，可增加配置，--prune表示删除无用的key
 - 运行期切换语言，支持参数占位替换
 - 使用 `_source_text.dart` 做校验与反查，避免 key 丢失
 
@@ -17,7 +21,7 @@
 
 ```yaml
 dependencies:
-  i18n_tr: 0.0.3
+  i18n_tr: 0.0.4
 ```
 
 配置 `i18n_tr`（在应用的 `pubspec.yaml`）：
@@ -44,6 +48,10 @@ i18n_tr:
       label: 日本語
       file: ja_jp.dart
       map: jaJP
+  prune_unused: true # 可选，默认false，删除无用的key
+  migrations: # 可选，文案迁移，不改变Key，旧文案->新文案
+    - from: 旧文案
+      to: 新文案
 ```
 
 运行生成器：
@@ -75,7 +83,8 @@ void main() async {
 ```dart
 Text(tr('国际化'));
 Text(tr('当前语言'));
-Text(tr('你好，{name}', {'name': 'Alice'}));
+Text(tr('English'));
+Text(tr('你好，{name}', {'name': tr('世界')}));
 ```
 
 绑定到 `MaterialApp`：
