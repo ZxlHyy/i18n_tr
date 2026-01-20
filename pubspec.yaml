@@ -1,6 +1,6 @@
 name: i18n_tr
 description: "A lightweight Flutter internationalization (i18n) solution with runtime locale switching, minimal rebuilds, and support for value-to-key lookup and parameterized translations."
-version: 0.0.5
+version: 0.0.6
 homepage: https://github.com/ZxlHyy/i18n_tr
 repository: https://github.com/ZxlHyy/i18n_tr
 issue_tracker: https://github.com/ZxlHyy/i18n_tr/issues
@@ -19,7 +19,7 @@ dependencies:
   yaml: ^3.1.3
   args: ^2.7.0
   crypto: ^3.0.7
-  analyzer: ^5.13.0
+  analyzer: ^10.0.1
   shared_preferences: ^2.5.4
 
 dev_dependencies:

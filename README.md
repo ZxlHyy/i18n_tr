@@ -29,7 +29,7 @@
 
 ```yaml
 dependencies:
-  i18n_tr: 0.0.4
+  i18n_tr: 0.0.6
 ```
 
 配置 `i18n_tr`（在应用的 `pubspec.yaml`）：
