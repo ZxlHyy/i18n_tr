@@ -4,8 +4,8 @@
 
 [![pub package](https://img.shields.io/pub/v/i18n_tr.svg)](https://pub.dev/packages/i18n_tr)
 
-![命令示例](https://github.com/ZxlHyy/i18n_tr/blob/main/images/20260119171904.jpg)
-![Demo](https://github.com/ZxlHyy/i18n_tr/blob/main/images/SVID_20260119.gif)
+![命令示例](https://raw.githubusercontent.com/ZxlHyy/i18n_tr/blob/main/images/20260119171904.jpg)
+![Demo](https://raw.githubusercontent.com/ZxlHyy/i18n_tr/blob/main/images/SVID_20260119.gif)
 
 ## Features
 
