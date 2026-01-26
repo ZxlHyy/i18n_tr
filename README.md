@@ -4,16 +4,8 @@
 
 [![pub package](https://img.shields.io/pub/v/i18n_tr.svg)](https://pub.dev/packages/i18n_tr)
 
-<table align="center">
-  <tr valign="top">
-    <td>
-      <img src="./images/20260119171904.jpg" width="240" />
-    </td>
-    <td>
-      <img src="./images/SVID_20260119.gif" width="240" />
-    </td>
-  </tr>
-</table>
+![命令示例](https://github.com/ZxlHyy/i18n_tr/blob/main/images/20260119171904.jpg)
+![Demo](https://github.com/ZxlHyy/i18n_tr/blob/main/images/SVID_20260119.gif)
 
 ## Features
 
@@ -29,7 +21,7 @@
 
 ```yaml
 dependencies:
-  i18n_tr: 0.0.6
+  i18n_tr: 0.0.7
 ```
 
 配置 `i18n_tr`（在应用的 `pubspec.yaml`）：
