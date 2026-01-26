@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.7 - 2026-01-14
+## 0.0.8 - 2026-01-14
 ###  Modified
 - 优化：生成Key优化、命令输出增加统计说明、增加迁移和移除的配置
 - Optimization: Generate key optimizations, add statistical explanations to command output, and add configurations for migration and removal
