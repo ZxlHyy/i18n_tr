@@ -3,12 +3,9 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:i18n_tr/i18n.dart';
 import 'package:i18n_tr_example/i18n/i18n_config.dart';
 
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await I18n.instance.init(
-    config: i18nConfig,
-  );
+  await I18n.instance.init(config: i18nConfig);
   runApp(const MyApp());
 }
 
@@ -45,9 +42,7 @@ class HomePage extends StatelessWidget {
     final modes = I18n.instance.modes;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(tr('国际化')),
-      ),
+      appBar: AppBar(title: Text(tr('国际化'))),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -58,32 +53,30 @@ class HomePage extends StatelessWidget {
             Text('Current mode: ${mode.label}'),
             const SizedBox(height: 12),
 
-            Text(tr('你好，{name}', {'name': tr('世界')})),
+            Text(
+              tr('你好，{name}。我，{me}，打钱。', {'name': tr('世界'), 'me': tr('秦始皇')}),
+            ),
             Text(tr('登录')),
             Text(tr('Logout')),
             Text(tr('キャンセル')),
             Text(tr('新增')),
             Text(tr('迁移')),
             Text(tr('清理')),
-            Text(tr('''
+            Text(
+              tr('''
             这是一段测试文本。
-            ''')),
+            '''),
+            ),
 
             const Divider(height: 32),
 
-            Text(
-              tr('当前语言'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text(tr('当前语言'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(i18n.localeKey),
 
             const SizedBox(height: 16),
 
-            Text(
-              tr('选择语言'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text(tr('选择语言'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
 
             Column(

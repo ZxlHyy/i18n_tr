@@ -1,59 +1,52 @@
-/// bin/generate.dart
-///
-/// 依赖（放到你的工具包 / 项目 pubspec.yaml）：
-/// dependencies:
-///   args: ^2.5.0
-///   yaml: ^3.1.2
-///   crypto: ^3.0.3
-///   analyzer: ^5.13.0
-///
-/// 用法：
-/// 1) 默认读 pubspec.yaml 的 i18n_tr 配置：
-///    dart run i18n_tr:generate
-/// 2) 指定外部配置文件（yaml/json），覆盖 pubspec：
-///    dart run i18n_tr:generate --config i18n_tr_config.yaml
-///
-/// 配置格式：
-/// A) pubspec.yaml
-/// i18n_tr:
-///   project_lib: lib
-///   i18n_dir: i18n_tr/lib/i18n
-///   source_file: i18n_tr/lib/i18n/_source_text.dart
-///   config_file: i18n_tr/lib/i18n_config.dart
-///   source_locale: zh_CN
-///   fallback_locale: zh_CN
-///   system_label: 跟随系统
-///   prune_unused: false
-///   migrations:
-///     - from: 旧文案
-///       to: 新文案
-///   langs:
-///     - locale: zh_CN
-///       file: zh_cn.dart
-///       map: zhCN
-///       label: 简体中文
-///     - locale: en_US
-///       file: en_us.dart
-///       map: enUS
-///       label: English
-///
-/// B) i18n_tr_config.yaml（同结构，顶层无需 i18n_tr 包裹）
-/// project_lib: lib
-/// i18n_dir: i18n_tr/lib/i18n
-/// source_file: i18n_tr/lib/i18n/_source_text.dart
-/// config_file: i18n_tr/lib/i18n_config.dart
-/// source_locale: zh_CN
-/// fallback_locale: zh_CN
-/// system_label: 跟随系统
-/// prune_unused: false
-/// migrations:
-///   - from: 旧文案
-///     to: 新文案
-/// langs:
-///   - locale: zh_CN
-///     file: zh_cn.dart
-///     map: zhCN
-///     label: 简体中文
+// bin/generate.dart
+//
+// 用法：
+// 1) 默认读 pubspec.yaml 的 i18n_tr 配置：
+//    dart run i18n_tr:generate
+// 2) 指定外部配置文件（yaml/json），覆盖 pubspec：
+//    dart run i18n_tr:generate --config i18n_tr_config.yaml
+//
+// 配置格式：
+// A) pubspec.yaml
+// i18n_tr:
+//   project_lib: lib
+//   i18n_dir: lib/i18n
+//   source_file: lib/i18n/_source_text.dart
+//   config_file: lib/i18n/i18n_config.dart
+//   source_locale: zh_CN
+//   fallback_locale: zh_CN
+//   system_label: 跟随系统
+//   prune_unused: false
+//   migrations:
+//     - from: 旧文案
+//       to: 新文案
+//   langs:
+//     - locale: zh_CN
+//       file: zh_cn.dart
+//       map: zhCN
+//       label: 简体中文
+//     - locale: en_US
+//       file: en_us.dart
+//       map: enUS
+//       label: English
+//
+// B) i18n_tr_config.yaml（同结构，顶层无需 i18n_tr 包裹）
+// project_lib: lib
+// i18n_dir: lib/i18n
+// source_file: lib/i18n/_source_text.dart
+// config_file: lib/i18n/i18n_config.dart
+// source_locale: zh_CN
+// fallback_locale: zh_CN
+// system_label: 跟随系统
+// prune_unused: false
+// migrations:
+//   - from: 旧文案
+//     to: 新文案
+// langs:
+//   - locale: zh_CN
+//     file: zh_cn.dart
+//     map: zhCN
+//     label: 简体中文
 
 import 'dart:convert';
 import 'dart:io';
@@ -65,10 +58,23 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:crypto/crypto.dart';
 import 'package:yaml/yaml.dart';
 
+const _exitUsage = 1;
+const _exitConflict = 2;
+const _exitPlaceholder = 3;
+const _exitStale = 4;
+
 final RegExp _trPattern = RegExp(
   r'''tr\(\s*(['"])((?:\\.|(?!\1).)*)\1''',
   dotAll: true,
 );
+
+class GeneratorException implements Exception {
+  final int exitCode;
+  final String message;
+  final bool useStdout;
+
+  GeneratorException(this.exitCode, this.message, {this.useStdout = false});
+}
 
 class LangSpec {
   final String locale; // zh_CN（仅用于标识/可读）
@@ -88,7 +94,7 @@ class I18nTrConfig {
   final String projectLib; // lib
   final String i18nDir; // lib/i18n
   final String sourceFile; // lib/i18n/_source_text.dart
-  final String configFile; // lib/i18n_config.dart
+  final String configFile; // lib/i18n/i18n_config.dart
   final String sourceLocale; // zh_CN
   final String fallbackLocale; // zh_CN
   final String systemLabel; // 跟随系统
@@ -120,88 +126,155 @@ class MigrationSpec {
 class LoadedConfig {
   final I18nTrConfig config;
   final bool? pruneOverride;
+  final bool checkMode;
 
-  LoadedConfig({required this.config, required this.pruneOverride});
+  LoadedConfig({
+    required this.config,
+    required this.pruneOverride,
+    required this.checkMode,
+  });
 }
 
 Future<void> main(List<String> args) async {
-  final loaded = await _loadConfig(args);
-  final cfg = loaded.config;
-  final pruneUnused = loaded.pruneOverride ?? cfg.pruneUnused;
-
-  final foundTexts = await _scanTexts(cfg);
-  stdout.writeln('🔍 找到 ${foundTexts.length} 条 tr 文案（任意语言）');
-
-  final sourceMap = _loadSourceMap(cfg.sourceFile); // key -> text
-  final langData = <LangSpec, Map<String, String>>{};
-  final existingKeys = Set<String>.from(sourceMap.keys);
-  var migratedCount = 0;
-  var prunedCount = 0;
-
-  // 读取已有语言文件（保留已翻译内容）
-  for (final lang in cfg.langs) {
-    langData[lang] = _loadLangMap(lang.filePath, lang.mapName);
+  final exitCode = await runGenerator(args);
+  if (exitCode != 0) {
+    exit(exitCode);
   }
+}
 
-  // 文案迁移（保留历史翻译）
-  if (cfg.migrations.isNotEmpty) {
-    migratedCount = _applyMigrations(cfg.migrations, sourceMap, langData);
-  }
+Future<int> runGenerator(List<String> args) async {
+  try {
+    final loaded = await _loadConfig(args);
+    final cfg = loaded.config;
+    final pruneUnused = loaded.pruneOverride ?? cfg.pruneUnused;
 
-  // 生成 key + 补齐语言包
-  for (final text in foundTexts) {
-    final key = _toHashKey(text);
+    final foundTexts = await _scanTexts(cfg);
+    stdout.writeln('🔍 找到 ${foundTexts.length} 条 tr 文案（任意语言）');
 
-    // 校验：hash 对应的文案是否一致（防止文案变化导致复用旧 key）
-    final old = sourceMap[key];
-    if (old != null && old != text) {
-      stderr.writeln(
-        '❌ Hash 冲突或文案被修改: $key\n'
-            '旧: $old\n'
-            '新: $text\n'
-            '建议：不要直接修改 tr(原文案)，或提供迁移机制。',
-      );
-      exit(2);
-    }
+    final sourceMap = _loadSourceMap(cfg.sourceFile); // key -> text
+    final langData = <LangSpec, Map<String, String>>{};
+    final existingKeys = Set<String>.from(sourceMap.keys);
+    final migratedTextKeys = <String, String>{};
+    var migratedCount = 0;
+    var prunedCount = 0;
 
-    sourceMap[key] = text;
-
-    // 补齐各语言包缺失 key：先用原文案占位（保留可读）
+    // 读取已有语言文件（保留已翻译内容）
     for (final lang in cfg.langs) {
-      final map = langData[lang]!;
-      map.putIfAbsent(key, () => text);
+      langData[lang] = _loadLangMap(lang.filePath, lang.mapName);
     }
-  }
 
-  // 可选：清理未使用 key
-  if (pruneUnused) {
-    final usedKeys = foundTexts.map(_toHashKey).toSet();
-    final toRemove = sourceMap.keys.where((k) => !usedKeys.contains(k)).toList();
-    for (final key in toRemove) {
-      sourceMap.remove(key);
+    // 文案迁移（保留历史翻译）
+    if (cfg.migrations.isNotEmpty) {
+      migratedCount = _applyMigrations(
+        cfg.migrations,
+        sourceMap,
+        langData,
+        migratedTextKeys,
+      );
+    }
+
+    // 生成 key + 补齐语言包
+    for (final text in foundTexts) {
+      final key = _keyForText(text, migratedTextKeys);
+
+      // 校验：hash 对应的文案是否一致（防止文案变化导致复用旧 key）
+      final old = sourceMap[key];
+      if (old != null && old != text) {
+        throw GeneratorException(
+          _exitConflict,
+          '❌ Hash 冲突或文案被修改: $key\n'
+          '旧: $old\n'
+          '新: $text\n'
+          '建议：不要直接修改 tr(原文案)，或提供迁移机制。',
+        );
+      }
+
+      sourceMap[key] = text;
+
+      // 补齐各语言包缺失 key：先用原文案占位（保留可读）
       for (final lang in cfg.langs) {
-        langData[lang]!.remove(key);
+        final map = langData[lang]!;
+        map.putIfAbsent(key, () => text);
       }
     }
-    prunedCount = toRemove.length;
+
+    // 可选：清理未使用 key
+    if (pruneUnused) {
+      final usedKeys =
+          foundTexts.map((t) => _keyForText(t, migratedTextKeys)).toSet();
+      final toRemove =
+          sourceMap.keys.where((k) => !usedKeys.contains(k)).toList();
+      for (final key in toRemove) {
+        sourceMap.remove(key);
+        for (final lang in cfg.langs) {
+          langData[lang]!.remove(key);
+        }
+      }
+      prunedCount = toRemove.length;
+    }
+
+    final placeholderErrors = _validatePlaceholders(cfg, sourceMap, langData);
+    if (placeholderErrors.isNotEmpty) {
+      throw GeneratorException(
+        _exitPlaceholder,
+        '❌ 占位符校验失败：\n'
+        '${placeholderErrors.map((e) => '  - $e').join('\n')}',
+      );
+    }
+
+    final outputs = <String, String>{};
+    for (final lang in cfg.langs) {
+      outputs[lang.filePath] = _buildLangFileContent(
+        lang.mapName,
+        langData[lang]!,
+      );
+    }
+    outputs[cfg.sourceFile] = _buildSourceDartMapContent(sourceMap);
+    outputs[cfg.configFile] = _buildRuntimeConfigContent(cfg);
+
+    final addedCount = foundTexts
+        .map((t) => _keyForText(t, migratedTextKeys))
+        .where((k) => !existingKeys.contains(k))
+        .length;
+    stdout.writeln(
+        '📦 新增 $addedCount 个 key，迁移 $migratedCount 个 key，清理 $prunedCount 个 key');
+    _printMissingReport(cfg, sourceMap, langData);
+
+    if (loaded.checkMode) {
+      final staleFiles = _findStaleGeneratedFiles(outputs);
+      if (staleFiles.isNotEmpty) {
+        throw GeneratorException(
+          _exitStale,
+          '❌ 生成文件不是最新，请运行 dart run i18n_tr:generate\n'
+          '${staleFiles.map((path) => '  - $path').join('\n')}',
+        );
+      }
+      stdout.writeln('✅ --check 通过，生成文件已是最新');
+      return 0;
+    }
+
+    for (final entry in outputs.entries) {
+      _writeTextFile(entry.key, entry.value);
+    }
+
+    stdout.writeln('✅ 国际化语言文件 & 校验文件已更新完成');
+    return 0;
+  } on GeneratorException catch (e) {
+    if (e.message.isNotEmpty) {
+      if (e.useStdout) {
+        stdout.writeln(e.message);
+      } else {
+        stderr.writeln(e.message);
+      }
+    }
+    return e.exitCode;
+  } on ArgParserException catch (e) {
+    stderr.writeln('❌ ${e.message}');
+    return _exitUsage;
+  } on FormatException catch (e) {
+    stderr.writeln('❌ ${e.message}');
+    return _exitUsage;
   }
-
-  // 写回语言文件
-  for (final lang in cfg.langs) {
-    _writeLangFile(lang.filePath, lang.mapName, langData[lang]!);
-  }
-
-  // 写回 source 校验文件（Dart Map）
-  _writeSourceDartMap(cfg.sourceFile, sourceMap);
-
-  // 生成运行期配置文件（供 i18n.dart 直接使用）
-  _writeRuntimeConfig(cfg);
-
-  final addedCount =
-      foundTexts.map(_toHashKey).where((k) => !existingKeys.contains(k)).length;
-  stdout.writeln('✅ 国际化语言文件 & 校验文件已更新完成');
-  stdout.writeln('📦 新增 $addedCount 个 key，迁移 $migratedCount 个 key，清理 $prunedCount 个 key');
-  _printMissingReport(cfg, sourceMap, langData);
 }
 
 /// =====================
@@ -210,8 +283,7 @@ Future<void> main(List<String> args) async {
 Future<Set<String>> _scanTexts(I18nTrConfig cfg) async {
   final libDir = Directory(cfg.projectLib);
   if (!libDir.existsSync()) {
-    stderr.writeln('❌ 找不到目录：${cfg.projectLib}');
-    exit(1);
+    throw GeneratorException(_exitUsage, '❌ 找不到目录：${cfg.projectLib}');
   }
 
   final found = <String>{};
@@ -324,7 +396,6 @@ bool _isUnderDir(String filePath, String dirPath) {
 bool _shouldTreatAsText(String text) {
   final t = text.trim();
   if (t.isEmpty) return false;
-  if (t.runes.length < 2) return false; // 太短通常不是文案（可按需调整）
   if (RegExp(r'^\d+$').hasMatch(t)) return false; // 纯数字
   if (RegExp(r'^(https?:)?//').hasMatch(t)) return false; // URL
   if (t.contains('www.')) return false;
@@ -340,6 +411,10 @@ String _toHashKey(String text) {
   return 'h_${digest.substring(0, 12)}';
 }
 
+String _keyForText(String text, Map<String, String> migratedTextKeys) {
+  return migratedTextKeys[text] ?? _toHashKey(text);
+}
+
 /// =====================
 /// 读取/写入 source 文件：key -> 原始文案（Dart Map）
 /// =====================
@@ -353,33 +428,10 @@ Map<String, String> _loadSourceMap(String path) {
     return obj.map((k, v) => MapEntry(k.toString(), v.toString()));
   }
 
-  final content = file.readAsStringSync();
-  final reg = RegExp(
-    r'const\s+Map<String,\s*String>\s+i18nSourceText\s*=\s*\{([\s\S]*?)\};',
-    multiLine: true,
-  );
-  final match = reg.firstMatch(content);
-  if (match == null) return {};
-
-  final body = match.group(1) ?? '';
-  final entryReg = RegExp(
-    r"'((?:\\'|[^'])*)'\s*:\s*'((?:\\'|[^'])*)'",
-    multiLine: true,
-  );
-
-  final map = <String, String>{};
-  for (final m in entryReg.allMatches(body)) {
-    final k = _unescapeDartString(m.group(1) ?? '');
-    final v = _unescapeDartString(m.group(2) ?? '');
-    map[k] = v;
-  }
-  return map;
+  return _loadDartStringMap(file.readAsStringSync(), 'i18nSourceText');
 }
 
-void _writeSourceDartMap(String path, Map<String, String> sourceMap) {
-  final dir = Directory(File(path).parent.path);
-  if (!dir.existsSync()) dir.createSync(recursive: true);
-
+String _buildSourceDartMapContent(Map<String, String> sourceMap) {
   final keys = sourceMap.keys.toList()..sort();
   final sorted = <String, String>{
     for (final k in keys) k: sourceMap[k]!,
@@ -393,21 +445,27 @@ void _writeSourceDartMap(String path, Map<String, String> sourceMap) {
     );
   }
   sb.writeln('};\n');
-  File(path).writeAsStringSync(sb.toString());
+  return sb.toString();
 }
 
 /// =====================
-/// 读取/写入语言 Dart 文件：
-/// const Map<String, String> mapName = { 'h_xxx': 'value', ... };
+/// 读取/写入语言 Dart 文件。
+/// 结构为：const Map of String to String mapName = { 'h_xxx': 'value' };
 /// =====================
 Map<String, String> _loadLangMap(String path, String mapName) {
   final file = File(path);
   if (!file.existsSync()) return {};
 
   final content = file.readAsStringSync();
+  return _loadDartStringMap(content, mapName);
+}
+
+Map<String, String> _loadDartStringMap(String content, String variableName) {
+  final astMap = _loadDartStringMapFromAst(content, variableName);
+  if (astMap != null && astMap.isNotEmpty) return astMap;
 
   final reg = RegExp(
-    'const\\s+Map<String,\\s*String>\\s+$mapName\\s*=\\s*\\{([\\s\\S]*?)\\};',
+    'const\\s+Map<String,\\s*String>\\s+$variableName\\s*=\\s*\\{([\\s\\S]*?)\\};',
     multiLine: true,
   );
   final match = reg.firstMatch(content);
@@ -417,23 +475,55 @@ Map<String, String> _loadLangMap(String path, String mapName) {
 
   // 支持 \' 转义
   final entryReg = RegExp(
-    r"'((?:\\'|[^'])*)'\s*:\s*'((?:\\'|[^'])*)'",
+    r'''(['"])((?:\\.|(?!\1).)*)\1\s*:\s*(['"])((?:\\.|(?!\3).)*)\3''',
     multiLine: true,
   );
 
   final map = <String, String>{};
   for (final m in entryReg.allMatches(body)) {
-    final k = _unescapeDartString(m.group(1) ?? '');
-    final v = _unescapeDartString(m.group(2) ?? '');
+    final k = _unescapeDartString(m.group(2) ?? '');
+    final v = _unescapeDartString(m.group(4) ?? '');
     map[k] = v;
   }
   return map;
 }
 
-void _writeLangFile(String path, String mapName, Map<String, String> data) {
-  final dir = Directory(File(path).parent.path);
-  if (!dir.existsSync()) dir.createSync(recursive: true);
+Map<String, String>? _loadDartStringMapFromAst(
+  String content,
+  String variableName,
+) {
+  try {
+    final result = parseString(content: content, throwIfDiagnostics: false);
+    for (final declaration in result.unit.declarations) {
+      if (declaration is! TopLevelVariableDeclaration) continue;
+      for (final variable in declaration.variables.variables) {
+        if (variable.name.lexeme != variableName) continue;
+        final initializer = variable.initializer;
+        if (initializer is! SetOrMapLiteral || !initializer.isMap) {
+          return <String, String>{};
+        }
+        return _stringMapFromLiteral(initializer);
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
 
+Map<String, String> _stringMapFromLiteral(SetOrMapLiteral literal) {
+  final map = <String, String>{};
+  for (final element in literal.elements) {
+    if (element is! MapLiteralEntry) continue;
+    final key = _stringLiteralValue(element.key);
+    final value = _stringLiteralValue(element.value);
+    if (key == null || value == null) continue;
+    map[key] = value;
+  }
+  return map;
+}
+
+String _buildLangFileContent(String mapName, Map<String, String> data) {
   final keys = data.keys.toList()..sort();
 
   final sb = StringBuffer();
@@ -445,17 +535,13 @@ void _writeLangFile(String path, String mapName, Map<String, String> data) {
   }
   sb.writeln('};\n');
 
-  File(path).writeAsStringSync(sb.toString());
+  return sb.toString();
 }
 
 /// =====================
 /// 生成运行期配置文件（i18n_tr/lib/i18n_config.dart）
 /// =====================
-void _writeRuntimeConfig(I18nTrConfig cfg) {
-  final outFile = File(cfg.configFile);
-  final dir = Directory(outFile.parent.path);
-  if (!dir.existsSync()) dir.createSync(recursive: true);
-
+String _buildRuntimeConfigContent(I18nTrConfig cfg) {
   final imports = <String>{};
   imports.add(_relativeImportPath(cfg.configFile, cfg.sourceFile));
   for (final lang in cfg.langs) {
@@ -463,7 +549,9 @@ void _writeRuntimeConfig(I18nTrConfig cfg) {
   }
 
   final sb = StringBuffer();
-  sb.writeln("///This file is automatically generated. DO NOT EDIT, all your changes would be lost.");
+  sb.writeln(
+    '// This file is automatically generated. DO NOT EDIT, all your changes would be lost.',
+  );
   sb.writeln("import 'package:i18n_tr/i18n_config.dart';");
   for (final p in imports) {
     sb.writeln("import '$p';");
@@ -485,7 +573,29 @@ void _writeRuntimeConfig(I18nTrConfig cfg) {
   sb.writeln('  ],');
   sb.writeln(');');
 
-  outFile.writeAsStringSync(sb.toString());
+  return sb.toString();
+}
+
+void _writeTextFile(String path, String content) {
+  final file = File(path);
+  final dir = Directory(file.parent.path);
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+  file.writeAsStringSync(content);
+}
+
+List<String> _findStaleGeneratedFiles(Map<String, String> outputs) {
+  final stale = <String>[];
+  for (final entry in outputs.entries) {
+    final file = File(entry.key);
+    if (!file.existsSync()) {
+      stale.add(entry.key);
+      continue;
+    }
+    if (file.readAsStringSync() != entry.value) {
+      stale.add(entry.key);
+    }
+  }
+  return stale;
 }
 
 String _relativeImportPath(String fromFile, String targetFile) {
@@ -589,19 +699,16 @@ String _normalizePath(String path) {
 /// =====================
 Future<LoadedConfig> _loadConfig(List<String> args) async {
   final parser = ArgParser()
-    ..addOption('config', abbr: 'c', help: '配置文件路径（yaml/json），优先级高于 pubspec.yaml')
+    ..addOption('config',
+        abbr: 'c', help: '配置文件路径（yaml/json），优先级高于 pubspec.yaml')
     ..addFlag('prune', negatable: false, help: '清理未使用的 key（覆盖配置）')
+    ..addFlag('check', negatable: false, help: '只校验生成文件是否最新，不写入文件')
     ..addFlag('help', abbr: 'h', negatable: false, help: '查看帮助');
 
   final res = parser.parse(args);
 
   if (res['help'] == true) {
-    stdout.writeln('i18n_tr generator\n');
-    stdout.writeln('用法：');
-    stdout.writeln('  dart run i18n_tr:generate');
-    stdout.writeln('  dart run i18n_tr:generate --config i18n_tr_config.yaml\n');
-    stdout.writeln(parser.usage);
-    exit(0);
+    throw GeneratorException(0, _helpText(parser), useStdout: true);
   }
 
   final configPath = (res['config'] as String?)?.trim();
@@ -609,12 +716,14 @@ Future<LoadedConfig> _loadConfig(List<String> args) async {
     return LoadedConfig(
       config: _loadFromConfigFile(configPath),
       pruneOverride: res['prune'] == true ? true : null,
+      checkMode: res['check'] == true,
     );
   }
 
   return LoadedConfig(
     config: _loadFromPubspec(),
     pruneOverride: res['prune'] == true ? true : null,
+    checkMode: res['check'] == true,
   );
 }
 
@@ -649,12 +758,16 @@ I18nTrConfig _loadFromConfigFile(String path) {
 
   if (path.endsWith('.json')) {
     final obj = jsonDecode(text);
-    if (obj is! Map) _failWithTemplate('配置 JSON 顶层必须是对象：$path');
+    if (obj is! Map) {
+      _failWithTemplate('配置 JSON 顶层必须是对象：$path');
+    }
     map = obj.map((k, v) => MapEntry(k.toString(), v));
   } else {
     final y = loadYaml(text);
     final plain = _yamlToPlain(y);
-    if (plain is! Map<String, dynamic>) _failWithTemplate('配置 YAML 顶层必须是映射：$path');
+    if (plain is! Map<String, dynamic>) {
+      _failWithTemplate('配置 YAML 顶层必须是映射：$path');
+    }
     map = plain;
   }
 
@@ -677,7 +790,7 @@ I18nTrConfig _parseConfig(Map<String, dynamic> m, {required String from}) {
   }
 
   final projectLib = getStr('project_lib', def: 'lib');
-  final i18nDir = getStr('i18n_dir', def: 'i18n_tr/lib/i18n');
+  final i18nDir = getStr('i18n_dir', def: 'lib/i18n');
   final sourceFile = getStr('source_file', def: '$i18nDir/_source_text.dart');
   final configFile = getStr('config_file', def: '$i18nDir/i18n_config.dart');
   final sourceLocale = getStr('source_locale', def: 'zh');
@@ -707,7 +820,8 @@ I18nTrConfig _parseConfig(Map<String, dynamic> m, {required String from}) {
       throw FormatException('[$from] langs 项必须包含 locale/file/map：$plain');
     }
 
-    final filePath = file.contains('/') || file.contains('\\') ? file : '$i18nDir/$file';
+    final filePath =
+        file.contains('/') || file.contains('\\') ? file : '$i18nDir/$file';
 
     langs.add(LangSpec(
       locale: locale,
@@ -756,31 +870,38 @@ dynamic _yamlToPlain(dynamic node) {
   return node;
 }
 
+String _helpText(ArgParser parser) {
+  return 'i18n_tr generator\n\n'
+      '用法：\n'
+      '  dart run i18n_tr:generate\n'
+      '  dart run i18n_tr:generate --config i18n_tr_config.yaml\n\n'
+      '${parser.usage}';
+}
+
 Never _failWithTemplate(String msg) {
-  stderr.writeln('❌ $msg\n');
-  stderr.writeln('你可以选择：\n');
-
-  stderr.writeln('A) 在 pubspec.yaml 添加：\n'
-      'i18n_tr:\n'
-      '  i18n_dir: lib/i18n\n'
-      '  # source_file: lib/i18n/_source_text.dart\n'
-      '  # config_file: lib/i18n_config.dart\n'
-      '  source_locale: zh_CN\n'
-      '  fallback_locale: en_US\n'
-      '  system_label: 跟随系统\n'
-      '  langs:\n'
-      '    - locale: zh_CN\n'
-      '      file: zh_cn.dart\n'
-      '      map: zhCN\n'
-      '      label: 简体中文\n'
-      '    - locale: en_US\n'
-      '      file: en_us.dart\n'
-      '      map: enUS\n');
-
-  stderr.writeln('B) 或创建 i18n_tr_config.yaml，并运行：\n'
-      'dart run i18n_tr:generate --config i18n_tr_config.yaml\n');
-
-  exit(1);
+  throw GeneratorException(
+    _exitUsage,
+    '❌ $msg\n\n'
+    '你可以选择：\n\n'
+    'A) 在 pubspec.yaml 添加：\n'
+    'i18n_tr:\n'
+    '  i18n_dir: lib/i18n\n'
+    '  # source_file: lib/i18n/_source_text.dart\n'
+    '  # config_file: lib/i18n/i18n_config.dart\n'
+    '  source_locale: zh_CN\n'
+    '  fallback_locale: en_US\n'
+    '  system_label: 跟随系统\n'
+    '  langs:\n'
+    '    - locale: zh_CN\n'
+    '      file: zh_cn.dart\n'
+    '      map: zhCN\n'
+    '      label: 简体中文\n'
+    '    - locale: en_US\n'
+    '      file: en_us.dart\n'
+    '      map: enUS\n\n'
+    'B) 或创建 i18n_tr_config.yaml，并运行：\n'
+    'dart run i18n_tr:generate --config i18n_tr_config.yaml',
+  );
 }
 
 List<MigrationSpec> _parseMigrations(dynamic node, {required String from}) {
@@ -819,23 +940,25 @@ int _applyMigrations(
   List<MigrationSpec> migrations,
   Map<String, String> sourceMap,
   Map<LangSpec, Map<String, String>> langData,
+  Map<String, String> migratedTextKeys,
 ) {
   var migrated = 0;
   for (final m in migrations) {
-    final oldKey = _toHashKey(m.fromText);
+    final oldKey =
+        _findSourceKeyByText(sourceMap, m.fromText) ?? _toHashKey(m.fromText);
     final newKey = _toHashKey(m.toText);
 
     final oldText = sourceMap[oldKey];
     final newText = sourceMap[newKey];
 
-    if (newText != null && newText != m.toText) {
-      stderr.writeln(
+    if (newKey != oldKey && newText != null && newText != m.toText) {
+      throw GeneratorException(
+        _exitConflict,
         '❌ 迁移冲突：$newKey 已存在不同文案\n旧: $newText\n新: ${m.toText}',
       );
-      exit(2);
     }
 
-    if (oldText != null && oldText != m.fromText) {
+    if (oldText != null && oldText != m.fromText && oldText != m.toText) {
       stderr.writeln(
         '⚠️ 迁移警告：旧 key 文案不一致，跳过迁移\nkey: $oldKey\n期望: ${m.fromText}\n实际: $oldText',
       );
@@ -849,32 +972,100 @@ int _applyMigrations(
       continue;
     }
 
+    if (oldText == null && newText == m.toText) {
+      migratedTextKeys[m.toText] = newKey;
+      continue;
+    }
+
     for (final entry in langData.entries) {
       final map = entry.value;
-      final hasOld = map.containsKey(oldKey);
-      final hasNew = map.containsKey(newKey);
+      final oldValue = map[oldKey];
+      final newValue = newKey == oldKey ? null : map[newKey];
 
-      if (hasOld) {
-        final oldValue = map[oldKey]!;
-        if (hasNew) {
-          final newValue = map[newKey]!;
-          if (newValue == m.fromText) {
-            map[newKey] = oldValue == m.fromText ? m.toText : oldValue;
-          }
-        } else {
-          map[newKey] = oldValue == m.fromText ? m.toText : oldValue;
+      if (oldValue == null) {
+        map[oldKey] = newValue ?? m.toText;
+      } else if (oldValue == m.fromText) {
+        map[oldKey] = m.toText;
+      }
+
+      if (newKey != oldKey && newValue != null) {
+        final stableValue = map[oldKey]!;
+        final newValueLooksGenerated =
+            newValue == m.fromText || newValue == m.toText;
+        final stableValueLooksGenerated =
+            stableValue == m.fromText || stableValue == m.toText;
+
+        if (stableValueLooksGenerated && !newValueLooksGenerated) {
+          map[oldKey] = newValue;
         }
-        map.remove(oldKey);
-      } else if (hasNew && map[newKey] == m.fromText) {
-        map[newKey] = m.toText;
+        map.remove(newKey);
       }
     }
 
-    sourceMap.remove(oldKey);
-    sourceMap[newKey] = m.toText;
+    sourceMap[oldKey] = m.toText;
+    if (newKey != oldKey) {
+      sourceMap.remove(newKey);
+    }
+    migratedTextKeys[m.toText] = oldKey;
     migrated++;
   }
   return migrated;
+}
+
+String? _findSourceKeyByText(Map<String, String> sourceMap, String text) {
+  for (final entry in sourceMap.entries) {
+    if (entry.value == text) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
+List<String> _validatePlaceholders(
+  I18nTrConfig cfg,
+  Map<String, String> sourceMap,
+  Map<LangSpec, Map<String, String>> langData,
+) {
+  final errors = <String>[];
+  final keys = sourceMap.keys.toList()..sort();
+
+  for (final key in keys) {
+    final sourceText = sourceMap[key];
+    if (sourceText == null) continue;
+
+    final expected = _placeholderNames(sourceText);
+    for (final lang in cfg.langs) {
+      final translated = langData[lang]?[key];
+      if (translated == null) continue;
+
+      final actual = _placeholderNames(translated);
+      if (_sameStringSet(expected, actual)) continue;
+
+      errors.add(
+        '${lang.locale} $key 占位符不一致，source=${_formatSet(expected)}，'
+        'actual=${_formatSet(actual)}，text=$translated',
+      );
+    }
+  }
+
+  return errors;
+}
+
+Set<String> _placeholderNames(String text) {
+  final reg = RegExp(r'\{([A-Za-z_][A-Za-z0-9_]*)\}');
+  return {
+    for (final match in reg.allMatches(text)) match.group(1)!,
+  };
+}
+
+bool _sameStringSet(Set<String> a, Set<String> b) {
+  return a.length == b.length && a.containsAll(b);
+}
+
+String _formatSet(Set<String> values) {
+  if (values.isEmpty) return '{}';
+  final sorted = values.toList()..sort();
+  return '{${sorted.join(', ')}}';
 }
 
 void _printMissingReport(

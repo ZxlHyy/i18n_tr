@@ -13,16 +13,17 @@
 - 直接用原文案作为 key（例如中文），无需手写 key
 - `dart run i18n_tr:generate` 自动提取文案并生成语言包
 - `dart run i18n_tr:generate --config i18n_tr_config.yaml --prune` 同上，可增加配置，--prune表示删除无用的key
+- `dart run i18n_tr:generate --check` 仅校验生成文件是否最新，适合 CI
 - 运行期切换语言，支持参数占位替换
 - 使用 `_source_text.dart` 做校验与反查，避免 key 丢失
 
 ## Getting started
 
-在你的应用中添加依赖（建议 path 依赖）：
+在你的应用中添加依赖：
 
 ```yaml
 dependencies:
-  i18n_tr: 0.0.8
+  i18n_tr: ^1.0.0
 ```
 
 配置 `i18n_tr`（在应用的 `pubspec.yaml`）：
@@ -30,9 +31,9 @@ dependencies:
 ```yaml
 i18n_tr:
   project_lib: lib
-  i18n_dir: i18n_tr/lib/i18n
-  #source_file: i18n_tr/lib/i18n/_source_text.dart # 可选，配置文件放置位置
-  #config_file: i18n_tr/lib/i18n_config.dart # 可选，配置文件放置位置
+  i18n_dir: lib/i18n
+  #source_file: lib/i18n/_source_text.dart # 可选，文案索引文件位置
+  #config_file: lib/i18n/i18n_config.dart # 可选，运行期配置文件位置
   source_locale: zh_CN # 可选
   fallback_locale: zh_CN # 可选
   system_label: 跟随系统 # 可选
@@ -50,7 +51,7 @@ i18n_tr:
       file: ja_jp.dart
       map: jaJP
   prune_unused: true # 可选，默认false，删除无用的key
-  migrations: # 可选，文案迁移，不改变Key，旧文案->新文案
+  migrations: # 可选，文案迁移，保留旧 key，旧文案->新文案
     - from: 旧文案
       to: 新文案
 ```
@@ -65,6 +66,10 @@ B) 或创建 i18n_tr_config.yaml 添加配置，并运行：
 ```bash
 dart run i18n_tr:generate --config i18n_tr_config.yaml
 ```
+C) 在 CI 中校验生成文件是否已提交：
+```bash
+dart run i18n_tr:generate --check
+```
 
 ## Usage
 
@@ -72,6 +77,7 @@ dart run i18n_tr:generate --config i18n_tr_config.yaml
 
 ```dart
 import 'package:i18n_tr/i18n.dart';
+import 'package:your_app/i18n/i18n_config.dart';
 
 void main() async {
   await I18n.instance.init(config: i18nConfig); // 初始化传入生成的i18n_config中的i18nConfig（后续命令直接生成）
@@ -119,9 +125,9 @@ I18n.instance.change(mode);
 
 ## Generated files
 
-- `/lib/i18n/zh_cn.dart` 等语言包
-- `/lib/i18n/_source_text.dart` 文案校验与反查 Map
-- `/lib/i18n_config.dart` 运行期配置（`I18nRuntimeConfig`）
+- `lib/i18n/zh_cn.dart` 等语言包
+- `lib/i18n/_source_text.dart` 文案校验与反查 Map
+- `lib/i18n/i18n_config.dart` 运行期配置（`I18nRuntimeConfig`）
 
 ## Example
 
@@ -132,3 +138,4 @@ I18n.instance.change(mode);
 
 - 建议不要直接修改生成的文件，统一通过生成器更新
 - 若文案变动导致 key 冲突，生成器会报错提示
+- 各语言翻译必须保留与原文案一致的 `{name}` 形式占位符；占位符缺失或多余时生成器会失败

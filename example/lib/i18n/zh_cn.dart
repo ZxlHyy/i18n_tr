@@ -1,7 +1,9 @@
 const Map<String, String> zhCN = {
   'h_0323de4f66a1': '登出',
+  'h_1a17724e3dde': '秦始皇',
   'h_26defddbea60': '迁移',
   'h_402d19e50fff': '登录',
+  'h_564ed8c81bfc': '你好，{name}。我，{me}，打钱。',
   'h_66ab5e9f24c8': '新增',
   'h_6ef34982969f': '取消',
   'h_a94ea8c004af': '当前语言',
