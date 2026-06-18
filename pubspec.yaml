@@ -6,6 +6,24 @@ homepage: https://github.com/ZxlHyy/i18n_tr
 repository: https://github.com/ZxlHyy/i18n_tr
 issue_tracker: https://github.com/ZxlHyy/i18n_tr/issues
 documentation: https://github.com/ZxlHyy/i18n_tr#readme
+topics:
+  - i18n
+  - tr
+  - internationalization
+  - language
+  - localization
+
+screenshots:
+  - description: Internationalization of the native language.
+    path: images/20260615.gif
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  web:
+  windows:
 
 #dart run i18n_tr
 executables:
